@@ -1,0 +1,460 @@
+--[[ 
+Ultimate Hacker Suite V3
+Features:
+- Mouse-proximity lock
+- Smooth aimbot
+- Head/Chest/Mixed lock
+- Hitboxes always visible
+- Healthbars next to hitboxes
+- Stickman rig skeleton
+- NameTags above heads
+- Offscreen hides elements
+- Tracers with dark rainbow, synced with nametags
+- Menu top-right toggle with P, draggable
+- Press E to teleport forward 50 studs
+- Crosshair toggle (plus style), default OFF
+- Defaults: Smooth 0, Range 1000
+]] 
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local camera = workspace.CurrentCamera
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- CONFIG
+local DEFAULT_RANGE = 1000
+local MAX_RANGE = 1000
+local MAX_SMOOTH = 40
+local STRICT_LOCK_RADIUS = 60
+local SKELETON_THICKNESS = 1.5
+local TRACER_THICKNESS = 2 -- tiny bit thicker
+local CROSSHAIR_SIZE = 8
+
+-- STATE
+local aimbotHeld = false
+local rangeValue = DEFAULT_RANGE
+local smoothValue = 0
+local ESP_ENABLED = true
+local lockTarget = "Mixed"
+local tracerStartPos = "Bottom" -- Top / Middle / Bottom
+local crosshairEnabled = false
+
+-- UI
+local screenGui = Instance.new("ScreenGui", playerGui)
+screenGui.Name = "UltimateHackerSuiteV3"
+screenGui.ResetOnSpawn = false
+
+local mainFrame = Instance.new("Frame", screenGui)
+mainFrame.AnchorPoint = Vector2.new(1,0)
+mainFrame.Position = UDim2.new(1,-20,0,20)
+mainFrame.Size = UDim2.new(0,380,0,460)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+mainFrame.BorderSizePixel = 0
+mainFrame.Visible = false
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0,12)
+Instance.new("UIStroke", mainFrame).Color = Color3.fromRGB(80,80,80)
+
+local title = Instance.new("TextLabel", mainFrame)
+title.Size = UDim2.new(1,-20,0,28)
+title.Position = UDim2.new(0,10,0,6)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamSemibold
+title.TextSize = 16
+title.TextColor3 = Color3.fromRGB(255,255,255)
+title.Text = "Ultimate Hacker Suite V3"
+
+local info = Instance.new("TextLabel", mainFrame)
+info.Size = UDim2.new(1,-20,0,18)
+info.Position = UDim2.new(0,10,0,34)
+info.BackgroundTransparency = 1
+info.Font = Enum.Font.Gotham
+info.TextSize = 12
+info.TextColor3 = Color3.fromRGB(180,180,180)
+info.Text = "Hold Right Click to aim. Press P to toggle menu."
+
+-- DRAGGABLE
+local dragging, dragInput, dragStart, startPos = false, nil, nil, nil
+local function update(input)
+    local delta = input.Position - dragStart
+    mainFrame.Position = UDim2.new(
+        startPos.X.Scale,
+        startPos.X.Offset + delta.X,
+        startPos.Y.Scale,
+        startPos.Y.Offset + delta.Y
+    )
+end
+title.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging=false end
+        end)
+    end
+end)
+title.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput=input end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if input==dragInput and dragging then update(input) end
+end)
+
+-- SLIDERS
+local function createSlider(parent, y, labelText, min, max, default, onChange)
+    local label = Instance.new("TextLabel", parent)
+    label.Size = UDim2.new(0.45,0,0,20)
+    label.Position = UDim2.new(0,12,0,y)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 13
+    label.TextColor3 = Color3.fromRGB(200,200,200)
+    label.Text = labelText .. ": " .. tostring(math.floor(default))
+
+    local sliderBack = Instance.new("Frame", parent)
+    sliderBack.Size = UDim2.new(0.5,-24,0,10)
+    sliderBack.Position = UDim2.new(0.45,8,0,y+5)
+    sliderBack.BackgroundColor3 = Color3.fromRGB(60,60,60)
+    sliderBack.BorderSizePixel = 0
+    Instance.new("UICorner", sliderBack).CornerRadius = UDim.new(0,6)
+
+    local fill = Instance.new("Frame", sliderBack)
+    fill.Size = UDim2.new((default-min)/(max-min),0,1,0)
+    fill.BackgroundColor3 = Color3.fromRGB(0,210,140)
+    fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0,6)
+
+    local draggingSlider=false
+    local val = default
+    sliderBack.InputBegan:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 then draggingSlider=true end
+    end)
+    sliderBack.InputEnded:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 then draggingSlider=false end
+    end)
+    RunService.RenderStepped:Connect(function()
+        if draggingSlider then
+            local absPos = sliderBack.AbsolutePosition.X
+            local absSize = sliderBack.AbsoluteSize.X
+            local mx = UserInputService:GetMouseLocation().X
+            local pct = math.clamp((mx-absPos)/absSize,0,1)
+            fill.Size = UDim2.new(pct,0,1,0)
+            val = min + pct*(max-min)
+            label.Text = labelText .. ": " .. tostring(math.floor(val))
+            if onChange then pcall(onChange,val) end
+        end
+    end)
+    return function() return val end
+end
+
+local getRange = createSlider(mainFrame,60,"Range",50,MAX_RANGE,DEFAULT_RANGE,function(v) rangeValue=v end)
+local getSmooth = createSlider(mainFrame,120,"Smoothness",0,MAX_SMOOTH,smoothValue,function(v) smoothValue=v end)
+
+-- ESP BUTTON
+local espBtn = Instance.new("TextButton", mainFrame)
+espBtn.Size = UDim2.new(1,-24,0,34)
+espBtn.Position = UDim2.new(0,12,0,180)
+espBtn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+espBtn.TextColor3 = Color3.fromRGB(255,255,255)
+espBtn.Font = Enum.Font.GothamSemibold
+espBtn.TextSize = 14
+espBtn.Text = "ESP: ON"
+Instance.new("UICorner", espBtn).CornerRadius = UDim.new(0,8)
+espBtn.MouseButton1Click:Connect(function()
+    ESP_ENABLED = not ESP_ENABLED
+    espBtn.Text = ESP_ENABLED and "ESP: ON" or "ESP: OFF"
+end)
+
+-- Lock dropdown
+local lockDropdown = Instance.new("TextButton", mainFrame)
+lockDropdown.Size = UDim2.new(0.5,-12,0,30)
+lockDropdown.Position = UDim2.new(0,12,0,230)
+lockDropdown.BackgroundColor3 = Color3.fromRGB(60,60,60)
+lockDropdown.TextColor3 = Color3.fromRGB(255,255,255)
+lockDropdown.Text = "Lock: Mixed"
+Instance.new("UICorner", lockDropdown).CornerRadius = UDim.new(0,6)
+local options={"Head","Chest","Mixed"}
+lockDropdown.MouseButton1Click:Connect(function()
+    local currentIndex
+    for i,v in ipairs(options) do if v==lockTarget then currentIndex=i break end end
+    currentIndex = currentIndex % #options +1
+    lockTarget = options[currentIndex]
+    lockDropdown.Text = "Lock: "..lockTarget
+end)
+
+-- Tracer start button
+local tracerBtn = Instance.new("TextButton", mainFrame)
+tracerBtn.Size = UDim2.new(0.5,-12,0,30)
+tracerBtn.Position = UDim2.new(0.5,0,0,230)
+tracerBtn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+tracerBtn.TextColor3 = Color3.fromRGB(255,255,255)
+tracerBtn.Text = "Tracer: Bottom"
+Instance.new("UICorner", tracerBtn).CornerRadius = UDim.new(0,6)
+local tracerOptions = {"Top","Middle","Bottom"}
+tracerBtn.MouseButton1Click:Connect(function()
+    local idx
+    for i,v in ipairs(tracerOptions) do if v==tracerStartPos then idx=i break end end
+    idx = idx % #tracerOptions +1
+    tracerStartPos = tracerOptions[idx]
+    tracerBtn.Text = "Tracer: "..tracerStartPos
+end)
+
+-- Crosshair toggle button
+local crossBtn = Instance.new("TextButton", mainFrame)
+crossBtn.Size = UDim2.new(1,-24,0,30)
+crossBtn.Position = UDim2.new(0,12,0,280)
+crossBtn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+crossBtn.TextColor3 = Color3.fromRGB(255,255,255)
+crossBtn.Text = "Crosshair: OFF"
+Instance.new("UICorner", crossBtn).CornerRadius = UDim.new(0,6)
+crossBtn.MouseButton1Click:Connect(function()
+    crosshairEnabled = not crosshairEnabled
+    crossBtn.Text = crosshairEnabled and "Crosshair: ON" or "Crosshair: OFF"
+end)
+
+-- Menu toggle
+UserInputService.InputBegan:Connect(function(input,gp)
+    if gp then return end
+    if input.KeyCode==Enum.KeyCode.P then mainFrame.Visible=not mainFrame.Visible end
+end)
+
+-- Right click
+UserInputService.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton2 then aimbotHeld=true end end)
+UserInputService.InputEnded:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton2 then aimbotHeld=false end end)
+
+-- ESP CACHE
+local espCache = {}
+local function createEspForPlayer(plr)
+    if espCache[plr] then return end
+    local data = {}
+    data.box = Drawing.new("Square")
+    data.box.Thickness = 2
+    data.box.Filled = false
+    data.box.Color = Color3.fromRGB(0,0,255)
+    data.box.Visible = false
+
+    data.healthBar = Drawing.new("Square")
+    data.healthBar.Filled = true
+    data.healthBar.Visible=false
+    data.healthBarBg = Drawing.new("Square")
+    data.healthBarBg.Filled=true
+    data.healthBarBg.Color=Color3.fromRGB(50,50,50)
+    data.healthBarBg.Visible=false
+
+    data.skel = {}
+    for _,v in ipairs({"HeadToTorso","LeftArm","RightArm","LeftLeg","RightLeg"}) do
+        local l = Drawing.new("Line")
+        l.Thickness = SKELETON_THICKNESS
+        l.Color = Color3.fromRGB(0,0,255)
+        l.Visible=false
+        data.skel[v]=l
+    end
+
+    data.tracer = Drawing.new("Line")
+    data.tracer.Thickness = TRACER_THICKNESS
+    data.tracer.Visible=false
+
+    data.nametag = Drawing.new("Text")
+    data.nametag.Center = true
+    data.nametag.Size = 8
+    data.nametag.Color = Color3.fromRGB(0,0,255)
+    data.nametag.Visible=false
+
+    espCache[plr]=data
+end
+local function removeEspForPlayer(plr)
+    local d = espCache[plr]
+    if not d then return end
+    pcall(function()
+        d.box:Remove()
+        d.healthBar:Remove()
+        d.healthBarBg:Remove()
+        d.tracer:Remove()
+        d.nametag:Remove()
+        for _,l in pairs(d.skel) do l:Remove() end
+    end)
+    espCache[plr]=nil
+end
+Players.PlayerAdded:Connect(function(plr) if plr~=player then task.wait(0.05); createEspForPlayer(plr) end end)
+Players.PlayerRemoving:Connect(removeEspForPlayer)
+for _,plr in ipairs(Players:GetPlayers()) do if plr~=player then createEspForPlayer(plr) end end
+
+-- HELPERS
+local function getTargetPart(char)
+    if lockTarget=="Head" then return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+    elseif lockTarget=="Chest" then return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
+    else
+        local head,charRoot = char:FindFirstChild("Head"),char:FindFirstChild("HumanoidRootPart")
+        if head and charRoot then
+            local mousePos = UserInputService:GetMouseLocation()
+            local screenH = camera:WorldToViewportPoint(head.Position)
+            local screenR = camera:WorldToViewportPoint(charRoot.Position)
+            return (Vector2.new(screenH.X,screenH.Y)-mousePos).Magnitude < (Vector2.new(screenR.X,screenR.Y)-mousePos).Magnitude and head or charRoot
+        end
+        return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+    end
+end
+
+local function findMouseTarget(maxRange, lockRadius)
+    local mousePos = UserInputService:GetMouseLocation()
+    local best,bestDist = nil,lockRadius+1
+    for _,plr in ipairs(Players:GetPlayers()) do
+        if plr==player then continue end
+        local char = plr.Character
+        if not char then continue end
+        local hum = char:FindFirstChild("Humanoid")
+        if not hum or hum.Health<=0 then continue end
+        local part = getTargetPart(char)
+        if not part then continue end
+        local screenPos,_ = camera:WorldToViewportPoint(part.Position)
+        local dist = (Vector2.new(screenPos.X,screenPos.Y)-mousePos).Magnitude
+        local worldDist = (part.Position-(player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character.HumanoidRootPart.Position or camera.CFrame.Position)).Magnitude
+        if dist<bestDist and dist<=lockRadius and worldDist<=maxRange then
+            best=part
+            bestDist=dist
+        end
+    end
+    return best
+end
+
+-- MAIN LOOP
+local hue = 0
+local crossLines = {}
+for i=1,4 do
+    crossLines[i] = Drawing.new("Line")
+    crossLines[i].Visible=false
+    crossLines[i].Thickness=2
+end
+
+RunService.RenderStepped:Connect(function()
+    -- AIMBOT
+    if aimbotHeld and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local target = findMouseTarget(rangeValue,STRICT_LOCK_RADIUS)
+        if target then
+            local smooth = math.clamp(smoothValue,0,MAX_SMOOTH)
+            local newCFrame = CFrame.new(camera.CFrame.Position,target.Position)
+            camera.CFrame = camera.CFrame:Lerp(newCFrame,smooth>0 and 1/smooth or 1)
+        end
+    end
+
+    hue = (hue+1)%360
+    local color = Color3.fromHSV(hue/360,1,1)
+
+    -- ESP
+    for plr,data in pairs(espCache) do
+        local char = plr.Character
+        if not char then continue end
+        local hum = char:FindFirstChild("Humanoid")
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not hum or hum.Health<=0 or not root then
+            data.box.Visible=false
+            data.healthBar.Visible=false
+            data.healthBarBg.Visible=false
+            data.tracer.Visible=false
+            data.nametag.Visible=false
+            for _,v in pairs(data.skel) do v.Visible=false end
+            continue
+        end
+
+        local parts = {
+            Head = char:FindFirstChild("Head"),
+            Torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"),
+            LeftArm = char:FindFirstChild("LeftUpperArm") or char:FindFirstChild("Left Arm"),
+            RightArm = char:FindFirstChild("RightUpperArm") or char:FindFirstChild("Right Arm"),
+            LeftLeg = char:FindFirstChild("LeftUpperLeg") or char:FindFirstChild("Left Leg"),
+            RightLeg = char:FindFirstChild("RightUpperLeg") or char:FindFirstChild("Right Leg")
+        }
+
+        local screenPos={}
+        local offscreen=false
+        for k,v in pairs(parts) do
+            if not v then offscreen=true; break end
+            local pos,_ = camera:WorldToViewportPoint(v.Position)
+            if pos.Z<=0 then offscreen=true end
+            screenPos[k] = Vector2.new(pos.X,pos.Y)
+        end
+        if offscreen then
+            data.box.Visible=false
+            data.healthBar.Visible=false
+            data.healthBarBg.Visible=false
+            data.tracer.Visible=false
+            data.nametag.Visible=false
+            for _,v in pairs(data.skel) do v.Visible=false end
+            continue
+        end
+
+        -- Skeleton
+        local s = data.skel
+        s.HeadToTorso.From = screenPos.Head
+        s.HeadToTorso.To = screenPos.Torso
+        s.LeftArm.From = screenPos.Torso
+        s.LeftArm.To = screenPos.LeftArm
+        s.RightArm.From = screenPos.Torso
+        s.RightArm.To = screenPos.RightArm
+        s.LeftLeg.From = screenPos.Torso
+        s.LeftLeg.To = screenPos.LeftLeg
+        s.RightLeg.From = screenPos.Torso
+        s.RightLeg.To = screenPos.RightLeg
+        for _,line in pairs(s) do line.Color=color line.Visible=ESP_ENABLED end
+
+        -- Hitbox
+        local minX,minY,maxX,maxY = math.huge,math.huge,-math.huge,-math.huge
+        for _,v in pairs(screenPos) do minX=math.min(minX,v.X); maxX=math.max(maxX,v.X); minY=math.min(minY,v.Y); maxY=math.max(maxY,v.Y) end
+        data.box.Position = Vector2.new(minX,minY)
+        data.box.Size = Vector2.new(maxX-minX,maxY-minY)
+        data.box.Color=color
+        data.box.Visible=ESP_ENABLED
+
+        -- Healthbar
+        local hpPct = math.clamp(hum.Health/hum.MaxHealth,0,1)
+        data.healthBarBg.Position = Vector2.new(minX-6,minY)
+        data.healthBarBg.Size = Vector2.new(4,maxY-minY)
+        data.healthBarBg.Visible=ESP_ENABLED
+        data.healthBar.Position = Vector2.new(minX-6,minY+(1-hpPct)*(maxY-minY))
+        data.healthBar.Size = Vector2.new(4,(maxY-minY)*hpPct)
+        data.healthBar.Color = Color3.fromHSV(hpPct*0.33,1,1)
+        data.healthBar.Visible=ESP_ENABLED
+
+        -- Nametag
+        data.nametag.Position = Vector2.new(screenPos.Head.X,screenPos.Head.Y-15)
+        data.nametag.Text = plr.Name
+        data.nametag.Color = color
+        data.nametag.Visible=ESP_ENABLED
+
+        -- Tracer
+        local startY = tracerStartPos=="Top" and 0 or tracerStartPos=="Middle" and camera.ViewportSize.Y/2 or camera.ViewportSize.Y
+        data.tracer.From = Vector2.new(camera.ViewportSize.X/2,startY)
+        data.tracer.To = screenPos.Torso
+        data.tracer.Color = color
+        data.tracer.Visible=ESP_ENABLED
+    end
+
+    -- CROSSHAIR
+    for i,line in pairs(crossLines) do line.Visible=false end
+    if crosshairEnabled then
+        local cx,cy = camera.ViewportSize.X/2, camera.ViewportSize.Y/2
+        local s = CROSSHAIR_SIZE
+        -- Vertical
+        crossLines[1].From = Vector2.new(cx,cy-s)
+        crossLines[1].To = Vector2.new(cx,cy+s)
+        -- Horizontal
+        crossLines[2].From = Vector2.new(cx-s,cy)
+        crossLines[2].To = Vector2.new(cx+s,cy)
+        for i=1,2 do crossLines[i].Color=color crossLines[i].Visible=true end
+    end
+end)
+
+-- TELEPORT DASH
+UserInputService.InputBegan:Connect(function(input,gp)
+    if gp then return end
+    if input.KeyCode==Enum.KeyCode.E then
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            hrp.CFrame = hrp.CFrame + hrp.CFrame.LookVector * 50
+        end
+    end
+end)
+
+print("VROHUB loaded")
